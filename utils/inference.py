@@ -22,6 +22,7 @@ from utils.helpers import (
 from utils.cond_fn import MSEGuidance, WeightedMSEGuidance
 
 
+
 MODELS = {
     ### stage_1 model weights
     "bsrnet": "https://github.com/cszn/KAIR/releases/download/v1.0/BSRNet.pth",
@@ -36,6 +37,20 @@ MODELS = {
     "v1_general": "https://huggingface.co/lxq007/DiffBIR-v2/resolve/main/v1_general.pth",
     "v2": "https://huggingface.co/lxq007/DiffBIR-v2/resolve/main/v2.pth"
 }
+
+
+def setup_ddp():
+    # DDP Settings
+    torch.distributed.init_process_group(backend="nccl")
+    
+def get_device(rank):
+    # Set the device for process
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+        return torch.device(f"cuda:{rank}")
+    else:
+        return torch.device("cpu")    
+
 
 
 def load_model_from_url(url: str) -> Dict[str, torch.Tensor]:
@@ -82,7 +97,20 @@ class InferenceLoop:
             control_sd = load_model_from_url(MODELS["v2"])
         self.cldm.load_controlnet_from_ckpt(control_sd)
         print(f"strictly load controlnet weight")
-        self.cldm.eval().to(self.args.device)
+        
+        # self.cldm.eval().to(self.args.device)
+        self.cldm.eval()
+        
+        # self.cldm = torch.nn.DataParallel(self.cldm, device_ids=[0,1,2,3,4,5,6,7])
+        # self.cldm.cuda()
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
+
+        self.cldm = self.cldm.to(device)
+        self.cldm = torch.nn.parallel.DistributedDataParallel(
+            self.cldm, device_ids=[torch.cuda.current_device()]
+        )
+        
         ### load diffusion
         self.diffusion: Diffusion = instantiate_from_config(OmegaConf.load("configs/inference/diffusion.yaml"))
         self.diffusion.to(self.args.device)
@@ -167,8 +195,20 @@ class BSRInferenceLoop(InferenceLoop):
         self.bsrnet: RRDBNet = instantiate_from_config(OmegaConf.load("configs/inference/bsrnet.yaml"))
         sd = load_model_from_url(MODELS["bsrnet"])
         self.bsrnet.load_state_dict(sd, strict=True)
-        self.bsrnet.eval().to(self.args.device)
+        
+        # self.bsrnet.eval().to(self.args.device)
+        self.bsrnet.eval()
+        
+        # self.bsrnet = torch.nn.DataParallel(self.bsrnet, device_ids=[0,1,2,3,4,5,6,7])
+        # self.bsrnet.cuda()
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
 
+        self.bsrnet = self.bsrnet.to(device)
+        self.bsrnet = torch.nn.parallel.DistributedDataParallel(
+            self.bsrnet, device_ids=[torch.cuda.current_device()]
+        )
+        
     def init_pipeline(self) -> None:
         self.pipeline = BSRNetPipeline(self.bsrnet, self.cldm, self.diffusion, self.cond_fn, self.args.device, self.args.upscale)
 
@@ -180,8 +220,23 @@ class BFRInferenceLoop(InferenceLoop):
         self.swinir_face: SwinIR = instantiate_from_config(OmegaConf.load("configs/inference/swinir.yaml"))
         sd = load_model_from_url(MODELS["swinir_face"])
         self.swinir_face.load_state_dict(sd, strict=True)
-        self.swinir_face.eval().to(self.args.device)
+        
+        
+        # self.swinir_face.eval().to(self.args.device)
+        self.swinir_face.eval()
+        
+        # self.swinir_face = torch.nn.DataParallel(self.swinir_face, device_ids=[0,1,2,3,4,5,6,7])
+        # self.swinir_face.cuda()
+        
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
 
+        self.swinir_face = self.swinir_face.to(device)
+        self.swinir_face = torch.nn.parallel.DistributedDataParallel(
+            self.swinir_face, device_ids=[torch.cuda.current_device()]
+        )
+        
+        
     def init_pipeline(self) -> None:
         self.pipeline = SwinIRPipeline(self.swinir_face, self.cldm, self.diffusion, self.cond_fn, self.args.device)
 
@@ -197,8 +252,21 @@ class BIDInferenceLoop(InferenceLoop):
         self.scunet_psnr: SCUNet = instantiate_from_config(OmegaConf.load("configs/inference/scunet.yaml"))
         sd = load_model_from_url(MODELS["scunet_psnr"])
         self.scunet_psnr.load_state_dict(sd, strict=True)
-        self.scunet_psnr.eval().to(self.args.device)
+        
+        # self.scunet_psnr.eval().to(self.args.device)
+        self.scunet_psnr.eval()
+        
+        # self.scunet_psnr = torch.nn.DataParallel(self.scunet_psnr, device_ids=[0,1,2,3,4,5,6,7])
+        # self.scunet_psnr.cuda()
+        
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
 
+        self.scunet_psnr = self.scunet_psnr.to(device)
+        self.scunet_psnr = torch.nn.parallel.DistributedDataParallel(
+            self.scunet_psnr, device_ids=[torch.cuda.current_device()]
+        )
+        
     def init_pipeline(self) -> None:
         self.pipeline = SCUNetPipeline(self.scunet_psnr, self.cldm, self.diffusion, self.cond_fn, self.args.device)
 
@@ -219,8 +287,23 @@ class V1InferenceLoop(InferenceLoop):
         else:
             raise ValueError(f"DiffBIR v1 doesn't support task: {self.args.task}, please use v2 by passsing '--version v2'")
         self.swinir.load_state_dict(sd, strict=True)
-        self.swinir.eval().to(self.args.device)
+        
+        # self.swinir.eval().to(self.args.device)
+        self.swinir.eval()
+        
+        
+        # self.swinir = torch.nn.DataParallel(self.swinir, device_ids=[0,1,2,3,4,5,6,7])
+        # self.swinir.cuda()
+        
+        
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
 
+        self.swinir = self.swinir.to(device)
+        self.swinir = torch.nn.parallel.DistributedDataParallel(
+            self.swinir, device_ids=[torch.cuda.current_device()]
+        )
+        
     def init_pipeline(self) -> None:
         self.pipeline = SwinIRPipeline(self.swinir, self.cldm, self.diffusion, self.cond_fn, self.args.device)
 
@@ -236,12 +319,44 @@ class UnAlignedBFRInferenceLoop(InferenceLoop):
         self.bsrnet: RRDBNet = instantiate_from_config(OmegaConf.load("configs/inference/bsrnet.yaml"))
         sd = load_model_from_url(MODELS["bsrnet"])
         self.bsrnet.load_state_dict(sd, strict=True)
-        self.bsrnet.eval().to(self.args.device)
+        
+        
+        # self.bsrnet.eval().to(self.args.device)
+        self.bsrnet.eval()
+        
+        
+        # self.bsrnet = torch.nn.DataParallel(self.bsrnet, device_ids=[0,1,2,3,4,5,6,7])
+        # self.bsrnet.cuda()
+        
+        
+        
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
 
+        self.bsrnet = self.bsrnet.to(device)
+        self.bsrnet = torch.nn.parallel.DistributedDataParallel(
+            self.bsrnet, device_ids=[torch.cuda.current_device()]
+        )
+        
         self.swinir_face: SwinIR = instantiate_from_config(OmegaConf.load("configs/inference/swinir.yaml"))
         sd = load_model_from_url(MODELS["swinir_face"])
         self.swinir_face.load_state_dict(sd, strict=True)
-        self.swinir_face.eval().to(self.args.device)
+        
+        # self.swinir_face.eval().to(self.args.device)
+        self.swinir_face.eval()
+        
+        
+        # self.swinir_face = torch.nn.DataParallel(self.swinir_face, device_ids=[0,1,2,3,4,5,6,7])
+        # self.swinir_face.cuda()
+        
+        
+        rank = torch.distributed.get_rank()
+        device = get_device(rank)
+
+        self.swinir_face = self.swinir_face.to(device)
+        self.swinir_face = torch.nn.parallel.DistributedDataParallel(
+            self.swinir_face, device_ids=[torch.cuda.current_device()]
+        )
 
     def init_pipeline(self) -> None:
         self.pipes = {

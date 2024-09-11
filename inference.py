@@ -5,7 +5,8 @@ import torch
 from accelerate.utils import set_seed
 from utils.inference import (
     V1InferenceLoop,
-    BSRInferenceLoop, BFRInferenceLoop, BIDInferenceLoop, UnAlignedBFRInferenceLoop
+    BSRInferenceLoop, BFRInferenceLoop, BIDInferenceLoop, UnAlignedBFRInferenceLoop,
+    setup_ddp
 )
 
 
@@ -66,6 +67,7 @@ def parse_args() -> Namespace:
 
 
 def main():
+    setup_ddp()
     args = parse_args()
     args.device = check_device(args.device)
     set_seed(args.seed)
